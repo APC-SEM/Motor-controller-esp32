@@ -2,17 +2,11 @@
 #include <stdio.h>
 
 // troubleshooting settings
-#define debug 1
+#define debug 0
 
 // Pin definition
 #define AH 27//12 // Output pin for MCPWM0A // HIGH Side
 #define AL 14//13 // Output pin for MCPWM0B // LOW Side
-
-// #define AH 25//12 // Output pin for MCPWM0A // HIGH Side
-// #define AL 26//13 // Output pin for MCPWM0B // LOW Side
-
-// #define BH 27 // Output pin for MCPWM1A // HIGH Side
-// #define BL 14 // Output pin for MCPWM1B // LOW Side
 
 #define BH 25 // Output pin for MCPWM1A // HIGH Side
 #define BL 26 // Output pin for MCPWM1B // LOW Side
@@ -31,7 +25,7 @@ const uint THROTTLE_PIN = 35;
 // Motor control system parameters
 const int system_freq = 5000; // 5 kHz pwm freq
 const int min_pwm_percent = 20; // Only turn on mosfets when above 20% to reduce in-rush current spike 
-#define DEADTIME_US 30 // set 10 us deadtime for rising and falling edge (not inlcuding mosfet driver deadtime)
+#define DEADTIME_US 0 // set 10 us deadtime for rising and falling edge (not inlcuding mosfet driver deadtime)
 mcpwm_config_t pwm_config;  // initialize "pwm_config" structure
 #include "motor.h"
 
@@ -238,7 +232,7 @@ void loop() {
           lastUpdatedLoopTime= millis();
       }
       
-      if (debug) x
+      if (debug) 
       {
         Serial.print(current_ma);
         Serial.print("  ");
@@ -256,9 +250,9 @@ void loop() {
       // Apply PWM Output to MOSFETs
       // Apply duty cycle limits to prevent very low or high outputs.
       // dutyCycleOutput = user_demand_dutyCycle;
-      // dutyCycleOutput = 50;
+      // dutyCycleOutput = 80;
       if(dutyCycleOutput < 20) dutyCycleOutput = 0; // Cut off below 20%.
-      if(dutyCycleOutput > 100) dutyCycleOutput = 100; // Cap above 95% to 100%.
+      if(dutyCycleOutput > 90) dutyCycleOutput = 100; // Cap above 95% to 100%.
 
       // Update duty cycles
       // mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, dutyCycle);
@@ -272,6 +266,7 @@ void loop() {
       // Serial.print(VOLTAGE_SCALING);
       // Serial.print("  ");
 
+      // Serial.println(analogRead(THROTTLE_PIN));
       // Serial.println(analogRead(33));
       // Serial.print(CURRENT_SCALING);
       // Serial.print("  ");
@@ -280,5 +275,5 @@ void loop() {
       // Serial.print("  ");
       // Serial.println((analogRead(32)-adc_bias)*-CURRENT_SCALING);
       // Serial.println(analogRead(THROTTLE_PIN));
-      delay(50);
+      // delay(50);
 }

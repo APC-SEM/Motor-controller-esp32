@@ -1,15 +1,19 @@
 #include "driver/mcpwm.h"
 #include <stdio.h>
 
+#include "lowPass.h"
+LowPass<1> lpTop(10, 1000, true);
+
 // troubleshooting settings
-#define debug 0
+#define debug 1
 
 // Pin definition
-#define AH 25//12 // Output pin for MCPWM0A // HIGH Side
-#define AL 26//13 // Output pin for MCPWM0B // LOW Side
+#define AH 27//12 // Output pin for MCPWM0A // HIGH Side
+#define AL 14//13 // Output pin for MCPWM0B // LOW Side
+#define CAPTURE_PIN 14         // Using same pin for capture
 
-#define BH 27 // Output pin for MCPWM1A // HIGH Side
-#define BL 14 // Output pin for MCPWM1B // LOW Side
+#define BH 25 // Output pin for MCPWM1A // HIGH Side
+#define BL 26 // Output pin for MCPWM1B // LOW Side
 
 #define CH 12 // Output pin for MCPWM2A // HIGH Side
 #define CL 13 // Output pin for MCPWM2B // LOW Side
@@ -17,10 +21,10 @@
 #define LED_PIN 2 // Status led
 
 // Analog input pins
-// const uint ISENSE_PIN = 26;
+const uint ISENSE_PIN = 32;
 // const uint VSENSE_PIN = 27;
 // const uint THROTTLE_PIN = 28;
-const uint THROTTLE_PIN = 32;
+const uint THROTTLE_PIN = 35;
 
 // Motor control system parameters
 const int system_freq = 5000; // 5 kHz pwm freq
@@ -35,27 +39,38 @@ int max_throttle = 4096;             // ADC value corresponding to maximum throt
 #include "memory.h"
 
 
+const int DUTY_CYCLE_MAX = 100;
 
-/*
+
 const bool CURRENT_CONTROL = true;          // Use current control or duty cycle control
-const int PHASE_MAX_CURRENT_MA = 6000;      // If using current control, the maximum phase current allowed
+const int PHASE_MAX_CURRENT_MA = 800;      // If using current control, the maximum phase current allowed
 const int BATTERY_MAX_CURRENT_MA = 3000;    // If using current control, the maximum battery current allowed
-const int CURRENT_CONTROL_LOOP_GAIN = 200;  // Adjusts the speed of the current control loop
-const int CURRENT_SCALING = 3.3 / 0.0005 / 20 / 4096 * 1000;
-const int VOLTAGE_SCALING = 3.3 / 4096 * (47 + 2.2) / 2.2 * 1000;
-const int ADC_BIAS_OVERSAMPLE = 1000;
-
+const int CURRENT_CONTROL_LOOP_GAIN = 50;  // Adjusts the speed of the current control loop
+/*
 int adc_isense = 0;
 int adc_vsense = 0;
 int adc_throttle = 0;
 
+*/
 int adc_bias = 0;
+const int ADC_BIAS_OVERSAMPLE = 1000;
+
+const int CURRENT_SCALING = 3.3 / 0.0005 / 50 / 4096 * 1000;
+const int VOLTAGE_SCALING = (3.3 / 4096 ) * (((47 + 2.2) / 2.2) * 1000);
 int voltage_mv = 0;
 int current_ma = 0;
 int current_target_ma = 0;
-*/
+int duty_cycle = 0;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// void IRAM_ATTR capture_isr(void *arg) {
+//     // currentValue = analogRead(CURRENT_SENSOR_PIN);  // Read current sensor
+    
+//     current_ma = (analogRead(32)-adc_bias)*CURRENT_SCALING;
+//     Serial.println("entered");
+// }
+
+
 void setup() {
     // Setup mosfets to turn off
     motor_gpio_setup();
@@ -141,8 +156,26 @@ void setup() {
     Serial.print("max: ");
     Serial.println(max_throttle);
   }
-  
+
+  // Current sensor calibration
+    delay(100);
+    for(uint i = 0; i < ADC_BIAS_OVERSAMPLE; i++)   // Find the zero-current ADC reading. Reads the ADC multiple times and takes the average
+    {
+        adc_bias += analogRead(ISENSE_PIN);
+    }
+    adc_bias /= ADC_BIAS_OVERSAMPLE;
+    
+
   delay(500); // delay to ensure values are up to date from memory
+  
+    // Configure MCPWM capture on CAPTURE_PIN (Rising edge)
+    // mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM_CAP_0, CAPTURE_PIN);  
+    // mcpwm_capture_enable(MCPWM_UNIT_0, MCPWM_SELECT_CAP0, MCPWM_POS_EDGE, 0);
+
+    // // Attach ISR for capture event
+    // mcpwm_isr_register(MCPWM_UNIT_0, capture_isr, NULL, ESP_INTR_FLAG_IRAM, NULL);
+
+
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -150,31 +183,19 @@ float throttle_Read()
 {
   static float throtDutyCycle = 0;
 
-  /*
-  // Serial.print for testing specific input throttle
-  if (Serial.available() > 0) {
-
-    // Read the input string
-    String input = Serial.readStringUntil('\n');
-    input.trim(); // Remove whitespace
-
-    //Convert the string to a float
-    float throttle = input.toFloat();
-  }
-  */
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Read From Throttle Pin
   int throttle = analogRead(THROTTLE_PIN);
   // if (throttle > max_throttle) max_throttle = throttle;
   // else if (throttle < min_throttle) min_throttle = throttle;
 
   throtDutyCycle =  map(throttle,min_throttle,max_throttle,0,100); // divide 100 to have 2 decimal place floating point
-  // throtDutyCycle = constrain(throttle,0,10000); // constraint it so it doesn't give unwanted results
-  // throtDutyCycle /=100;
+  if (throtDutyCycle>95)throtDutyCycle = 100;
+  // if (throtDutyCycle>95)throtDutyCycle = 100;
+  
   
   if (debug) {
-    Serial.print("throtDutyCycle: ");
-    Serial.println(throtDutyCycle);
+    // Serial.print("throtDutyCycle: ");
+    // Serial.println(throtDutyCycle);
   }
   return throtDutyCycle;
 }
@@ -198,11 +219,18 @@ void loop() {
       unsigned long currentTime = millis();
 
 
+      
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Applying Linear Ramp function, with smoothen acceleration, hard braking and software speed recovery
       // Apply Linear Ramp Function
       // Smooth acceleration, hard braking, and software-controlled speed recovery are implemented here.
       // The control loop updates every 0.05 seconds (50ms).
+
+
+    
+
+    current_ma = lpTop.filt((analogRead(32)-adc_bias)*CURRENT_SCALING);                   // low pass filter on current sensor input
 
       if((currentTime - lastUpdatedLoopTime)>= 50){ // 0.05s per cycle
           if((user_demand_dutyCycle < 5) && (dutyCycleLoop < min_pwm_percent)){ 
@@ -211,12 +239,14 @@ void loop() {
           }
           else if(user_demand_dutyCycle > dutyCycleLoop){ 
             // Smooth acceleration: Increase the duty cycle incrementally.
-            dutyCycleLoop += 1; // pwm% increase per cycle
+            // if(current_ma < PHASE_MAX_CURRENT_MA)
+              dutyCycleLoop += 1; // pwm% increase per cycle
+              
             dutyCycleOutput = dutyCycleLoop;
           }
           else if (user_demand_dutyCycle <= dutyCycleLoop){
             // Deceleration: Decrease the duty cycle more aggressively.  Software ramping down to decelerate, so that when accelerate again, it won't be from zero
-            dutyCycleLoop -= 2; // pwm% decrease per cycle
+              dutyCycleLoop -= 2; // pwm% decrease per cycle
             dutyCycleOutput = user_demand_dutyCycle;
           }
 
@@ -224,23 +254,49 @@ void loop() {
           lastUpdatedLoopTime= millis();
       }
       
-      if (debug) Serial.println(dutyCycleOutput);
+      if (debug) 
+      {
+        Serial.print(current_ma);
+        // Serial.print("  ");
+        // Serial.print(adc_bias);
+        // Serial.print(currentValue);  // Print the latest current reading
+        Serial.print("  ");
+        Serial.println(dutyCycleOutput);
+      }
+
+
+
+
+
       
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       // Apply PWM Output to MOSFETs
       // Apply duty cycle limits to prevent very low or high outputs.
+      // dutyCycleOutput = user_demand_dutyCycle;
+      // dutyCycleOutput = 80;
       if(dutyCycleOutput < 20) dutyCycleOutput = 0; // Cut off below 20%.
-      if(dutyCycleOutput > 95) dutyCycleOutput = 100; // Cap above 90% at 100%.
+      if(dutyCycleOutput > 90) dutyCycleOutput = 100; // Cap above 95% to 100%.
 
       // Update duty cycles
       // mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, dutyCycle);
       // mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, dutyCycleLoop);
+
+      // mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 0);//kiki100-dutyCycleOutput);
       mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, 100-dutyCycleOutput);
+      
       ledcWrite(2, dutyCycleOutput*2);   
 
-      // RAW pwm input
-      // mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, 100-user_demand_dutyCycle);
-      // ledcWrite(2, user_demand_dutyCycle*2); 
-            
-    
+      // Serial.print(VOLTAGE_SCALING);
+      // Serial.print("  ");
+
+      // Serial.println(analogRead(THROTTLE_PIN));
+      // Serial.println(analogRead(33));
+      // Serial.print(CURRENT_SCALING);
+      // Serial.print("  ");
+
+      // Serial.print((analogRead(32)));
+      // Serial.print("  ");
+      // Serial.println((analogRead(32)-adc_bias)*-CURRENT_SCALING);
+      // Serial.println(analogRead(THROTTLE_PIN));
+      delay(50);
 }

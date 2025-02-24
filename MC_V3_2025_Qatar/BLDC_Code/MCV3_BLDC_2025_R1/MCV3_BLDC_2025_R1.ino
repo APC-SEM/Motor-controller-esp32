@@ -30,7 +30,7 @@ const uint Hall3_Pin = 34;
 // Motor control system parameters
 const int system_freq = 5000; // 5 kHz pwm freq
 const int min_pwm_percent = 20; // Only turn on mosfets when above 20% to reduce in-rush current spike 
-#define DEADTIME_US 30 // set 10 us deadtime for rising and falling edge (not inlcuding mosfet driver deadtime)
+#define DEADTIME_US 20 // set 10 us deadtime for rising and falling edge (not inlcuding mosfet driver deadtime)
 mcpwm_config_t pwm_config;  // initialize "pwm_config" structure
 #include "motor.h"
 
@@ -311,7 +311,7 @@ void loop() {
       // dutyCycleOutput = user_demand_dutyCycle;
       // dutyCycleOutput = 40;
       if(dutyCycleOutput < 20) dutyCycleOutput = 0; // Cut off below 20%.
-      if(dutyCycleOutput > 100) dutyCycleOutput = 100; // Cap above 95% to 100%.
+      if(dutyCycleOutput > 90) dutyCycleOutput = 90; // Cap above 95% to 100%.
 
       // float complement = 100-dutyCycleOutput;
       // motorState=0;
@@ -354,15 +354,16 @@ void loop() {
     // motorState = motorState % 6; // Ensures motorState stays in the range [0, 5]
 
     
-      // Serial.print("  ");
-      // Serial.print(hallState1);
-      // Serial.print("  ");
-      // Serial.print(hallState2);
-      // Serial.print("  ");
-      // Serial.print(hallState3);
-      // Serial.print("  ");
-      // Serial.println(motorState);
-
+    if (debug) {
+      Serial.print("  ");
+      Serial.print(hallState1);
+      Serial.print("  ");
+      Serial.print(hallState2);
+      Serial.print("  ");
+      Serial.print(hallState3);
+      Serial.print("  ");
+      Serial.println(motorState);
+    }
 
       // Serial.print(VOLTAGE_SCALING);
       // Serial.print("  ");
